@@ -1,0 +1,11 @@
+{
+  "uuid": "service-switchboard@besmarques.eu",
+  "name": "Service Switchboard",
+  "description": "Start and stop user systemd services and Docker containers from a compact GNOME top-panel menu.",
+  "shell-version": [
+    "50"
+  ],
+  "url": "https://github.com/besmarques/gnome-service-switchboard",
+  "gettext-domain": "service-switchboard@besmarques.eu",
+  "settings-schema": "org.gnome.shell.extensions.service-switchboard"
+}
