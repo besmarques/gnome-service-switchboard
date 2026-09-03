@@ -1,8 +1,10 @@
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import {createServicePanel} from './servicePanel.js';
+import {createServicePanel} from './panel/servicePanel.js';
 
+// GNOME Shell loads this default class directly; the implementation stays in
+// plain function modules under panel/ and services/.
 export default class ServiceSwitchboardExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
@@ -12,6 +14,7 @@ export default class ServiceSwitchboardExtension extends Extension {
         });
 
         Main.panel.addToStatusArea(this.uuid, this._panel.indicator);
+        this._panel.indicator.show();
     }
 
     disable() {

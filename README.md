@@ -26,7 +26,8 @@ A compact GNOME Shell extension that puts local services in the top panel as **n
 - Keeps manual service creation available for targets discovery cannot find.
 - Uses only native GNOME Shell, GTK, and libadwaita widgets and semantic theme
   classes; it does not override theme colors or typography.
-- Includes a Details page with project, safety, privacy, and support information.
+- Includes an About page with project, backend, safety, privacy, and support
+  information.
 - Does **not** run commands through a shell.
 - Does **not** require root or `pkexec`.
 - Does **not** ship helper binaries or external scripts.
@@ -51,6 +52,15 @@ After GNOME 51 is stable and tested, update:
 
 `org.gnome.shell.extensions.service-switchboard`
 
+## Source layout
+
+GNOME still loads `extension/extension.js` and `extension/prefs.js` directly, so
+those stay at the extension root. The implementation lives in smaller folders:
+`panel/`, `services/`, `discovery/`, `preferences/`, `pages/`, and
+`components/`. Preferences are split into Active Services, Add Services, and
+About pages. Service lists use scrollable drawers so long discovery or
+configured-service lists do not grow the window indefinitely.
+
 ## Development install
 
 From the repository root:
@@ -72,18 +82,31 @@ out of your main desktop:
 ./scripts/run-nested.sh
 ```
 
-This installs the current source and opens a GNOME development session in a
-window. If the extension is not enabled there, open a terminal inside the
-nested desktop and run:
-
-```bash
-gnome-extensions enable service-switchboard@besmarques.eu
-```
+This installs the current source, opens a GNOME development session in a
+window, waits for that nested Shell to become ready, and enables the extension
+on its private D-Bus session automatically. Its extension state is printed in
+the VS Code terminal.
 
 Close the nested desktop window when finished. After another code change, run
 `./scripts/run-nested.sh` again so a fresh JavaScript engine loads it. GNOME 49+
 may require the Mutter development-kit package (`mutter-dev-bin` on Ubuntu or
 `mutter-devkit` on Fedora/Arch).
+
+### VS Code
+
+Use **Terminal → Run Task** (or **Tasks: Run Task** from the Command Palette):
+
+- **Extension: Run nested GNOME Shell** builds, installs, and opens the test
+  desktop in a window.
+- **Extension: Open Preferences** installs the latest source and opens the
+  preferences process.
+- **Extension: Build ZIP** creates the distribution package and is also the
+  default VS Code build task (`Ctrl+Shift+B`).
+- **Extension: Check source** runs validation without installing anything.
+
+Keep the VS Code terminal visible while using the nested Shell; extension logs
+and JavaScript errors are printed there. Stop the task or close the nested
+desktop window when finished.
 
 Preferences run in a separate process, so preference-only changes have a faster
 loop: close the old Preferences window, reinstall, and reopen it:

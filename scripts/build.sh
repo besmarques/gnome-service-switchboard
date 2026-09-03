@@ -14,10 +14,10 @@ if command -v glib-compile-schemas >/dev/null 2>&1; then
 fi
 
 if command -v node >/dev/null 2>&1; then
-  for file in "$EXT"/*.js; do
+  while IFS= read -r -d '' file; do
     cp "$file" /tmp/service-switchboard-check.mjs
     node --check /tmp/service-switchboard-check.mjs
-  done
+  done < <(find "$EXT" -name '*.js' -print0)
   rm -f /tmp/service-switchboard-check.mjs
 fi
 
@@ -26,11 +26,14 @@ fi
   zip -q -r "$DIST/$UUID.zip" \
     metadata.json \
     extension.js \
-    servicePanel.js \
-    serviceController.js \
-    serviceDiscovery.js \
     prefs.js \
     stylesheet.css \
+    components \
+    discovery \
+    pages \
+    panel \
+    preferences \
+    services \
     schemas
 )
 

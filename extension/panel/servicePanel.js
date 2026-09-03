@@ -1,40 +1,32 @@
-// Generated with AI for personal use.
-// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
-// and can maintain this code.
-
 import GLib from 'gi://GLib';
-import St from 'gi://St';
 
 import {gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+
+import {
+    addActor,
+    addPanelEmptyItem,
+    addPanelSeparator,
+    addPanelSubmenu,
+    createPanelIndicator,
+    createPanelMenuSection,
+    createPanelServiceRow,
+    createPanelServiceScrollView,
+} from '../components/panelMenu.js';
 
 import {
     getActiveStates,
     isServiceActive,
     setServiceActive,
-} from './serviceController.js';
+} from '../services/serviceController.js';
+import {loadConfiguredServices} from '../services/serviceSettings.js';
 
-function loadServices(settings) {
-    let parsed;
-    try {
-        parsed = JSON.parse(settings.get_string('services-json'));
-    } catch (error) {
-        console.warn(
-            `Service Switchboard: invalid services configuration: ${error.message}`);
-        return [];
-    }
-
-    return Array.isArray(parsed) ? parsed.filter(service =>
-        typeof service?.id === 'string' &&
-        typeof service?.name === 'string' &&
-        typeof service?.type === 'string' &&
-        typeof service?.target === 'string' &&
-        service.name.trim().length > 0 &&
-        service.target.trim().length > 0
-    ) : [];
-}
+const MIN_MENU_HEIGHT = 220;
+const MAX_MENU_HEIGHT = 360;
+const MENU_HEIGHT_RATIO = 0.5;
+const VISIBLE_SERVICE_ROWS = 5;
+const SERVICE_ROW_HEIGHT = 30;
+const SERVICE_GROUP_PADDING = 8;
 
 function setRowState(state, active) {
     if (state.row.state === active)
@@ -47,6 +39,8 @@ function setRowState(state, active) {
 export function createServicePanel({settings, openPreferences}) {
     const panel = {
         rows: new Map(),
+        activeStates: new Map(),
+        scrollActors: new Map(),
         destroyed: false,
         refreshing: false,
         refreshSourceId: 0,
@@ -56,18 +50,74 @@ export function createServicePanel({settings, openPreferences}) {
         monitorsChangedId: 0,
     };
 
-    const indicator = new PanelMenu.Button(0.0, _('Service Switchboard'), false);
+    const indicator = createPanelIndicator({
+        title: _('Service Switchboard'),
+        iconName: 'system-run-symbolic',
+    });
     panel.indicator = indicator;
-    indicator.add_child(new St.Icon({
-        icon_name: 'system-run-symbolic',
-        style_class: 'system-status-icon',
-    }));
 
     const updateMenuHeight = () => {
         const screenHeight = Main.layoutManager.primaryMonitor?.height ??
             global.stage.height;
+        const menuHeight = Math.min(
+            MAX_MENU_HEIGHT,
+            Math.max(MIN_MENU_HEIGHT, Math.floor(screenHeight * MENU_HEIGHT_RATIO))
+        );
+        const groupHeight =
+            (VISIBLE_SERVICE_ROWS * SERVICE_ROW_HEIGHT) + SERVICE_GROUP_PADDING;
         indicator.menu.actor.set_style(
-            `max-height: ${Math.max(320, Math.floor(screenHeight * 0.65))}px;`);
+            `max-height: ${menuHeight}px;`);
+        for (const [actor, rowCount] of panel.scrollActors) {
+            const visibleRows = Math.min(rowCount, VISIBLE_SERVICE_ROWS);
+            const visibleHeight =
+                (visibleRows * SERVICE_ROW_HEIGHT) + SERVICE_GROUP_PADDING;
+            actor.set_style(rowCount > VISIBLE_SERVICE_ROWS
+                ? `height: ${groupHeight}px; max-height: ${groupHeight}px;`
+                : `max-height: ${visibleHeight}px;`);
+        }
+    };
+
+    const updateActiveState = (service, active) => {
+        const oldActive = panel.activeStates.get(service.id) === true;
+        const newActive = active === true;
+        panel.activeStates.set(service.id, newActive);
+        return oldActive !== newActive;
+    };
+
+    const sortServices = services => [...services].sort((left, right) =>
+        Number(panel.activeStates.get(right.id) === true) -
+        Number(panel.activeStates.get(left.id) === true) ||
+        left.name.localeCompare(right.name));
+
+    const getGroupedServices = services => [
+        {
+            label: _('Your services'),
+            services: sortServices(services.filter(service =>
+                service.type === 'systemd-user' && !service.protected)),
+        },
+        {
+            label: _('Desktop and system'),
+            services: sortServices(services.filter(service =>
+                service.type === 'systemd-user' && service.protected)),
+        },
+        {
+            label: _('Docker'),
+            services: sortServices(services.filter(service =>
+                service.type === 'docker')),
+        },
+    ];
+
+    const getOrderSignature = services => getGroupedServices(services)
+        .map(group => `${group.label}:${group.services
+            .map(service => `${service.id}:${panel.activeStates.get(service.id)}`)
+            .join(',')}`)
+        .join('|');
+
+    const refreshLayoutAfterStateChange = () => {
+        const services = loadConfiguredServices(settings);
+        const orderSignature = getOrderSignature(services);
+        if (orderSignature !== panel.orderSignature)
+            rebuildMenu({refresh: false});
     };
 
     const refreshRow = async state => {
@@ -81,8 +131,14 @@ export function createServicePanel({settings, openPreferences}) {
                 `Service Switchboard: status check failed for ` +
                 `${state.service.name}: ${error.message}`);
         }
-        if (!panel.destroyed && !state.busy)
+        if (!panel.destroyed && !state.busy) {
+            const changed = updateActiveState(state.service, active);
+            if (changed) {
+                refreshLayoutAfterStateChange();
+                return;
+            }
             setRowState(state, active);
+        }
     };
 
     const setState = async (state, active) => {
@@ -96,14 +152,17 @@ export function createServicePanel({settings, openPreferences}) {
             state.busy = false;
             if (!panel.destroyed) {
                 await refreshRow(state);
-                state.row.sensitive = true;
+                if (panel.rows.get(state.service.id) === state)
+                    state.row.sensitive = true;
             }
         }
     };
 
     const addServiceRow = (service, menu) => {
-        const row = new PopupMenu.PopupSwitchMenuItem(service.name, false, {});
-        row.add_style_class_name('service-switchboard-service-row');
+        const row = createPanelServiceRow(
+            service.name,
+            panel.activeStates.get(service.id) === true
+        );
         const state = {
             service,
             row,
@@ -138,9 +197,15 @@ export function createServicePanel({settings, openPreferences}) {
     const addServiceGroup = (label, services) => {
         if (services.length === 0)
             return;
-        const submenu = new PopupMenu.PopupSubMenuMenuItem(label, false);
-        indicator.menu.addMenuItem(submenu);
-        services.forEach(service => addServiceRow(service, submenu.menu));
+        const submenu = addPanelSubmenu(indicator.menu, label);
+        const section = createPanelMenuSection();
+        const scrollView = createPanelServiceScrollView();
+        addActor(scrollView, section.actor);
+        addActor(submenu.menu.box, scrollView);
+        panel.scrollActors.set(scrollView, services.length);
+
+        services.forEach(service => addServiceRow(service, section));
+        updateMenuHeight();
     };
 
     const refreshAll = async () => {
@@ -152,6 +217,17 @@ export function createServicePanel({settings, openPreferences}) {
             const states = await getActiveStates(rows.map(row => row.service));
             if (panel.destroyed)
                 return;
+            let changed = false;
+            for (const state of rows) {
+                changed = updateActiveState(
+                    state.service,
+                    states.get(state.service.id)
+                ) || changed;
+            }
+            if (changed) {
+                refreshLayoutAfterStateChange();
+                return;
+            }
             for (const state of rows) {
                 if (!state.busy && panel.rows.get(state.service.id) === state)
                     setRowState(state, states.get(state.service.id));
@@ -161,28 +237,27 @@ export function createServicePanel({settings, openPreferences}) {
         }
     };
 
-    const rebuildMenu = () => {
+    const rebuildMenu = ({refresh = true} = {}) => {
         if (panel.destroyed)
             return;
         indicator.menu.removeAll();
         panel.rows.clear();
-        const services = loadServices(settings);
+        panel.scrollActors.clear();
+        const services = loadConfiguredServices(settings);
+        panel.orderSignature = getOrderSignature(services);
 
         if (services.length === 0) {
-            indicator.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-                _('No services configured'), {reactive: false, can_focus: false}));
+            addPanelEmptyItem(indicator.menu, _('No services configured'));
         } else {
-            addServiceGroup(_('Your services'), services.filter(service =>
-                service.type === 'systemd-user' && !service.protected));
-            addServiceGroup(_('Desktop and system'), services.filter(service =>
-                service.type === 'systemd-user' && service.protected));
-            addServiceGroup(_('Docker'), services.filter(service =>
-                service.type === 'docker'));
+            getGroupedServices(services).forEach(group =>
+                addServiceGroup(group.label, group.services));
         }
 
-        indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        addPanelSeparator(indicator.menu);
         indicator.menu.addAction(_('Preferences'), openPreferences);
-        refreshAll();
+        updateMenuHeight();
+        if (refresh)
+            refreshAll();
     };
 
     const startRefreshTimer = () => {
@@ -202,7 +277,7 @@ export function createServicePanel({settings, openPreferences}) {
     panel.monitorsChangedId = Main.layoutManager.connect(
         'monitors-changed', updateMenuHeight);
     panel.settingsChangedId = settings.connect(
-        'changed::services-json', rebuildMenu);
+        'changed::services-json', () => rebuildMenu());
     panel.intervalChangedId = settings.connect(
         'changed::refresh-interval', startRefreshTimer);
     panel.menuOpenChangedId = indicator.menu.connect(

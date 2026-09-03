@@ -1,44 +1,8 @@
-// Generated with AI for personal use.
-// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
-// and can maintain this code.
-
-import Gio from 'gi://Gio';
-
-export const DiscoveredServiceType = Object.freeze({
-    SYSTEMD_USER: 'systemd-user',
-    DOCKER: 'docker',
-});
-
-function execute(argv) {
-    let process;
-    try {
-        const launcher = new Gio.SubprocessLauncher({
-            flags: Gio.SubprocessFlags.STDOUT_PIPE |
-                Gio.SubprocessFlags.STDERR_PIPE,
-        });
-        launcher.setenv('LC_ALL', 'C', true);
-        process = launcher.spawnv(argv);
-    } catch (error) {
-        return Promise.reject(error);
-    }
-
-    return new Promise((resolve, reject) => {
-        process.communicate_utf8_async(null, null, (subprocess, result) => {
-            try {
-                const [, stdout, stderr] =
-                    subprocess.communicate_utf8_finish(result);
-                resolve({
-                    success: subprocess.get_successful(),
-                    status: subprocess.get_exit_status(),
-                    stdout: stdout ?? '',
-                    stderr: stderr ?? '',
-                });
-            } catch (error) {
-                reject(error);
-            }
-        });
-    });
-}
+import {execute} from '../services/subprocess.js';
+import {
+    TYPE_DOCKER,
+    TYPE_SYSTEMD_USER,
+} from '../services/serviceTypes.js';
 
 function assertSuccess(result, message) {
     if (result.success)
@@ -64,7 +28,7 @@ async function addSystemdOrigins(services) {
         'systemctl', '--user', 'show',
         '--property=Id', '--property=FragmentPath',
         ...services.map(service => service.target),
-    ]);
+    ], {localeC: true});
     assertSuccess(result, 'Could not identify user service origins');
 
     const paths = new Map();
@@ -89,11 +53,11 @@ async function discoverSystemdUserServices() {
         execute([
             'systemctl', '--user', 'list-unit-files',
             '--type=service', '--no-legend', '--no-pager', '--plain',
-        ]),
+        ], {localeC: true}),
         execute([
             'systemctl', '--user', 'list-units', '--type=service', '--all',
             '--no-legend', '--no-pager', '--plain',
-        ]),
+        ], {localeC: true}),
     ]);
     assertSuccess(filesResult, 'Could not discover user services');
     assertSuccess(unitsResult, 'Could not read user service status');
@@ -123,7 +87,7 @@ async function discoverSystemdUserServices() {
         const loaded = loadedUnits.get(unit);
         services.push({
             name: loaded?.name ?? unit.slice(0, -'.service'.length),
-            type: DiscoveredServiceType.SYSTEMD_USER,
+            type: TYPE_SYSTEMD_USER,
             target: unit,
             running: loaded?.running ?? false,
         });
@@ -134,7 +98,7 @@ async function discoverSystemdUserServices() {
             continue;
         services.push({
             name: loaded.name,
-            type: DiscoveredServiceType.SYSTEMD_USER,
+            type: TYPE_SYSTEMD_USER,
             target: unit,
             running: loaded.running,
         });
@@ -148,14 +112,14 @@ async function discoverDockerContainers() {
     const result = await execute([
         'docker', 'container', 'ls', '--all',
         '--format={{.Names}}\t{{.State}}',
-    ]);
+    ], {localeC: true});
     assertSuccess(result, 'Could not discover Docker containers');
 
     return result.stdout.split('\n').flatMap(line => {
         const [name, state] = line.trim().split('\t');
         return name ? [{
             name,
-            type: DiscoveredServiceType.DOCKER,
+            type: TYPE_DOCKER,
             target: name,
             running: state === 'running',
         }] : [];

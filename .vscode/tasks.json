@@ -1,0 +1,65 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Extension: Run nested GNOME Shell",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/run-nested.sh",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": false
+            }
+        },
+        {
+            "label": "Extension: Build ZIP",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/build.sh",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Extension: Install locally",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/install-local.sh",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Extension: Open Preferences",
+            "type": "shell",
+            "command": "gnome-extensions prefs service-switchboard@besmarques.eu",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOrder": "sequence",
+            "dependsOn": "Extension: Install locally",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "Extension: Check source",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/check.sh",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

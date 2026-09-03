@@ -1,41 +1,8 @@
-// Generated with AI for personal use.
-// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
-// and can maintain this code.
-
-import Gio from 'gi://Gio';
-
-export const ServiceType = Object.freeze({
-    SYSTEMD_USER: 'systemd-user',
-    DOCKER: 'docker',
-});
-
-function execute(argv) {
-    let process;
-    try {
-        process = Gio.Subprocess.new(argv,
-            Gio.SubprocessFlags.STDOUT_PIPE |
-            Gio.SubprocessFlags.STDERR_PIPE);
-    } catch (error) {
-        return Promise.reject(error);
-    }
-
-    return new Promise((resolve, reject) => {
-        process.communicate_utf8_async(null, null, (subprocess, result) => {
-            try {
-                const [, stdout, stderr] =
-                    subprocess.communicate_utf8_finish(result);
-                resolve({
-                    success: subprocess.get_successful(),
-                    status: subprocess.get_exit_status(),
-                    stdout: stdout ?? '',
-                    stderr: stderr ?? '',
-                });
-            } catch (error) {
-                reject(error);
-            }
-        });
-    });
-}
+import {execute} from './subprocess.js';
+import {
+    TYPE_DOCKER,
+    TYPE_SYSTEMD_USER,
+} from './serviceTypes.js';
 
 function validateTarget(target) {
     if (typeof target !== 'string' || target.trim().length === 0)
@@ -96,9 +63,9 @@ async function getDockerActiveStates(services) {
 export async function getActiveStates(services) {
     const states = new Map(services.map(service => [service.id, false]));
     const systemd = services.filter(service =>
-        service.type === ServiceType.SYSTEMD_USER);
+        service.type === TYPE_SYSTEMD_USER);
     const docker = services.filter(service =>
-        service.type === ServiceType.DOCKER);
+        service.type === TYPE_DOCKER);
     const results = await Promise.allSettled([
         getSystemdActiveStates(systemd),
         getDockerActiveStates(docker),
@@ -120,14 +87,14 @@ export async function getActiveStates(services) {
 export async function isServiceActive(service) {
     validateTarget(service.target);
 
-    if (service.type === ServiceType.SYSTEMD_USER) {
+    if (service.type === TYPE_SYSTEMD_USER) {
         const result = await execute([
             'systemctl', '--user', 'is-active', '--quiet', service.target,
         ]);
         return result.success;
     }
 
-    if (service.type === ServiceType.DOCKER) {
+    if (service.type === TYPE_DOCKER) {
         const result = await execute([
             'docker', 'inspect', '--format={{.State.Running}}', service.target,
         ]);
@@ -141,11 +108,11 @@ export async function setServiceActive(service, active) {
     validateTarget(service.target);
     let result;
 
-    if (service.type === ServiceType.SYSTEMD_USER) {
+    if (service.type === TYPE_SYSTEMD_USER) {
         result = await execute([
             'systemctl', '--user', active ? 'start' : 'stop', service.target,
         ]);
-    } else if (service.type === ServiceType.DOCKER) {
+    } else if (service.type === TYPE_DOCKER) {
         result = await execute([
             'docker', active ? 'start' : 'stop', service.target,
         ]);

@@ -1,12 +1,19 @@
 /* Geometry only: colors, borders, and switch states remain theme-defined. */
-.service-switchboard-service-row {
-  min-height: 0;
-  padding-top: 3px;
-  padding-bottom: 3px;
+.service-switchboard-service-scroll {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.service-switchboard-service-row.popup-menu-item {
+  spacing: 8px;
+  min-height: 30px;
+  padding-top: 2px;
+  padding-bottom: 2px;
 }
 
 .service-switchboard-service-row .toggle-switch {
-  width: 36px;
+  width: 34px;
+  height: 20px;
 }
 
 .service-switchboard-service-row .toggle-switch .handle {
