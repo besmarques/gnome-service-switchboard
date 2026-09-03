@@ -3,15 +3,13 @@ set -euo pipefail
 
 UUID="service-switchboard@besmarques.eu"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="$ROOT/extension"
-DEST="$HOME/.local/share/gnome-shell/extensions/$UUID"
+ZIP="$ROOT/dist/$UUID.zip"
 
-mkdir -p "$(dirname "$DEST")"
-rm -rf "$DEST"
-cp -a "$SOURCE" "$DEST"
+"$ROOT/scripts/build.sh"
+gnome-extensions install --force "$ZIP"
 
-echo "Installed $UUID to:"
-echo "  $DEST"
+echo "Installed $UUID from:"
+echo "  $ZIP"
 echo
 echo "Detected:"
 gnome-shell --version || true

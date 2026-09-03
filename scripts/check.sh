@@ -14,10 +14,10 @@ if command -v node >/dev/null 2>&1; then
   echo "Checking JavaScript syntax..."
   tmp="$(mktemp --suffix=.mjs)"
   trap 'rm -f "$tmp"' EXIT
-  for file in "$EXT"/*.js; do
+  while IFS= read -r -d '' file; do
     cp "$file" "$tmp"
     node --check "$tmp"
-  done
+  done < <(find "$EXT" -name '*.js' -print0)
 fi
 
 echo "Checking distribution exclusions..."

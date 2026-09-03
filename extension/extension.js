@@ -1,21 +1,20 @@
-// Generated with AI for personal use.
-// Do NOT upload to extensions.gnome.org (EGO) unless you understand JavaScript
-// and can maintain this code.
-
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import {ServicePanel} from './servicePanel.js';
+import {createServicePanel} from './panel/servicePanel.js';
 
+// GNOME Shell loads this default class directly; the implementation stays in
+// plain function modules under panel/ and services/.
 export default class ServiceSwitchboardExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
-        this._panel = new ServicePanel({
+        this._panel = createServicePanel({
             settings: this._settings,
             openPreferences: () => this.openPreferences(),
         });
 
         Main.panel.addToStatusArea(this.uuid, this._panel.indicator);
+        this._panel.indicator.show();
     }
 
     disable() {

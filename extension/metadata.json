@@ -7,5 +7,7 @@
   ],
   "url": "https://github.com/besmarques/gnome-service-switchboard",
   "gettext-domain": "service-switchboard@besmarques.eu",
-  "settings-schema": "org.gnome.shell.extensions.service-switchboard"
+  "settings-schema": "org.gnome.shell.extensions.service-switchboard",
+  "version": 6,
+  "version-name": "1.0.0"
 }
