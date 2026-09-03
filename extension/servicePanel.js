@@ -20,6 +20,7 @@ export class ServicePanel {
         this._rows = new Map();
         this._destroyed = false;
         this._refreshSourceId = 0;
+        this._refreshing = false;
 
         this.indicator = new PanelMenu.Button(
             0.0,
@@ -31,6 +32,12 @@ export class ServicePanel {
             icon_name: 'system-run-symbolic',
             style_class: 'system-status-icon',
         }));
+
+        this._monitorsChangedId = Main.layoutManager.connect(
+            'monitors-changed',
+            () => this._updateMenuHeight()
+        );
+        this._updateMenuHeight();
 
         this._settingsChangedId = this._settings.connect(
             'changed::services-json',
@@ -81,6 +88,11 @@ export class ServicePanel {
             this._menuOpenChangedId = 0;
         }
 
+        if (this._monitorsChangedId) {
+            Main.layoutManager.disconnect(this._monitorsChangedId);
+            this._monitorsChangedId = 0;
+        }
+
         this._rows.clear();
         this.indicator.destroy();
         this.indicator = null;
@@ -90,11 +102,25 @@ export class ServicePanel {
     }
 
     async refreshAll() {
-        if (this._destroyed)
+        if (this._destroyed || this._refreshing)
             return;
 
+        this._refreshing = true;
         const rows = [...this._rows.values()];
-        await Promise.all(rows.map(row => this._refreshRow(row)));
+        try {
+            const services = rows.map(state => state.service);
+            const states = await this._controller.getActiveStates(services);
+
+            if (this._destroyed)
+                return;
+
+            for (const state of rows) {
+                if (!state.busy && this._rows.get(state.service.id) === state)
+                    this._applyRowState(state, states.get(state.service.id));
+            }
+        } finally {
+            this._refreshing = false;
+        }
     }
 
     _rebuildMenu() {
@@ -114,8 +140,29 @@ export class ServicePanel {
                 })
             );
         } else {
-            for (const service of services)
-                this._addServiceRow(service);
+            const groups = [
+                {
+                    label: _('Your services'),
+                    services: services.filter(service =>
+                        service.type === 'systemd-user' && !service.protected
+                    ),
+                },
+                {
+                    label: _('Desktop and system'),
+                    services: services.filter(service =>
+                        service.type === 'systemd-user' && service.protected
+                    ),
+                },
+                {
+                    label: _('Docker'),
+                    services: services.filter(service =>
+                        service.type === 'docker'
+                    ),
+                },
+            ];
+
+            for (const group of groups)
+                this._addServiceGroup(group.label, group.services);
         }
 
         this.indicator.menu.addMenuItem(
@@ -129,29 +176,68 @@ export class ServicePanel {
         this.refreshAll();
     }
 
-    _addServiceRow(service) {
+    _addServiceGroup(label, services) {
+        if (services.length === 0)
+            return;
+
+        const submenu = new PopupMenu.PopupSubMenuMenuItem(label, false);
+        this.indicator.menu.addMenuItem(submenu);
+
+        for (const service of services)
+            this._addServiceRow(service, submenu.menu);
+    }
+
+    _addServiceRow(service, menu) {
         const row = new PopupMenu.PopupSwitchMenuItem(
             service.name,
             false,
             {}
         );
+        row.add_style_class_name('service-switchboard-service-row');
 
         const state = {
             service,
             row,
             busy: false,
             updating: false,
+            confirmStopUntil: 0,
         };
 
         row.connect('toggled', (_item, active) => {
             if (state.updating || state.busy)
                 return;
 
+            if (!active && state.service.protected === true &&
+                Date.now() > state.confirmStopUntil) {
+                state.confirmStopUntil = Date.now() + 10000;
+                state.updating = true;
+                state.row.setToggleState(true);
+                state.updating = false;
+                Main.notify(
+                    _('Service Switchboard safety warning'),
+                    _(
+                        'Stopping this desktop or system service may disrupt ' +
+                        'your session. Toggle it off again within 10 seconds ' +
+                        'to confirm.'
+                    )
+                );
+                return;
+            }
+
+            state.confirmStopUntil = 0;
+
             this._setServiceState(state, active);
         });
 
         this._rows.set(service.id, state);
-        this.indicator.menu.addMenuItem(row);
+        menu.addMenuItem(row);
+    }
+
+    _updateMenuHeight() {
+        const screenHeight = Main.layoutManager.primaryMonitor?.height ??
+            global.stage.height;
+        const maxHeight = Math.max(320, Math.floor(screenHeight * 0.65));
+        this.indicator.menu.actor.set_style(`max-height: ${maxHeight}px;`);
     }
 
     async _setServiceState(state, active) {
@@ -192,11 +278,16 @@ export class ServicePanel {
         if (this._destroyed || state.busy)
             return;
 
-        if (state.row.state !== active) {
-            state.updating = true;
-            state.row.setToggleState(active);
-            state.updating = false;
-        }
+        this._applyRowState(state, active);
+    }
+
+    _applyRowState(state, active) {
+        if (state.row.state === active)
+            return;
+
+        state.updating = true;
+        state.row.setToggleState(active);
+        state.updating = false;
     }
 
     _startRefreshTimer() {

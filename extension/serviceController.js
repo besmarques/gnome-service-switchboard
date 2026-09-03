@@ -10,6 +10,35 @@ export const ServiceType = Object.freeze({
 });
 
 export class ServiceController {
+    async getActiveStates(services) {
+        const states = new Map(services.map(service => [service.id, false]));
+        const systemd = services.filter(service =>
+            service.type === ServiceType.SYSTEMD_USER
+        );
+        const docker = services.filter(service =>
+            service.type === ServiceType.DOCKER
+        );
+
+        const results = await Promise.allSettled([
+            this._getSystemdActiveStates(systemd),
+            this._getDockerActiveStates(docker),
+        ]);
+
+        for (const result of results) {
+            if (result.status === 'fulfilled') {
+                for (const [id, active] of result.value)
+                    states.set(id, active);
+            } else {
+                console.warn(
+                    `Service Switchboard: batched status check failed: ` +
+                    (result.reason?.message ?? String(result.reason))
+                );
+            }
+        }
+
+        return states;
+    }
+
     async isActive(service) {
         switch (service.type) {
         case ServiceType.SYSTEMD_USER:
@@ -46,6 +75,24 @@ export class ServiceController {
         return result.success;
     }
 
+    async _getSystemdActiveStates(services) {
+        if (services.length === 0)
+            return new Map();
+
+        for (const service of services)
+            this._validateTarget(service.target);
+
+        const result = await this._execute([
+            'systemctl', '--user', 'is-active',
+            ...services.map(service => service.target),
+        ]);
+        const output = result.stdout.trimEnd().split('\n');
+        return new Map(services.map((service, index) => [
+            service.id,
+            output[index]?.trim() === 'active',
+        ]));
+    }
+
     async _setSystemdActive(unit, active) {
         this._validateTarget(unit);
 
@@ -73,6 +120,34 @@ export class ServiceController {
             return false;
 
         return result.stdout.trim() === 'true';
+    }
+
+    async _getDockerActiveStates(services) {
+        if (services.length === 0)
+            return new Map();
+
+        for (const service of services)
+            this._validateTarget(service.target);
+
+        const result = await this._execute([
+            'docker', 'inspect',
+            '--format={{.Id}}\t{{.Name}}\t{{.State.Running}}',
+            ...services.map(service => service.target),
+        ]);
+        const containers = result.stdout.split('\n').flatMap(line => {
+            const [id, rawName, running] = line.trim().split('\t');
+            if (!id || !rawName)
+                return [];
+            return [{id, name: rawName.replace(/^\//, ''), running}];
+        });
+
+        return new Map(services.map(service => {
+            const container = containers.find(candidate =>
+                candidate.name === service.target ||
+                candidate.id.startsWith(service.target)
+            );
+            return [service.id, container?.running === 'true'];
+        }));
     }
 
     async _setDockerActive(container, active) {

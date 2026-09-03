@@ -23,7 +23,15 @@ fi
 
 (
   cd "$EXT"
-  zip -q -r "$DIST/$UUID.zip"     metadata.json     extension.js     servicePanel.js     serviceController.js     prefs.js     schemas
+  zip -q -r "$DIST/$UUID.zip" \
+    metadata.json \
+    extension.js \
+    servicePanel.js \
+    serviceController.js \
+    serviceDiscovery.js \
+    prefs.js \
+    stylesheet.css \
+    schemas
 )
 
 echo "Built:"
