@@ -8,7 +8,7 @@ import {
     gettext as _,
 } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-import {ServiceDiscovery} from './serviceDiscovery.js';
+import {discoverServices} from './serviceDiscovery.js';
 
 const TYPE_SYSTEMD_USER = 'systemd-user';
 const TYPE_DOCKER = 'docker';
@@ -25,7 +25,6 @@ export default class ServiceSwitchboardPreferences extends ExtensionPreferences 
         this._discoveredServices = [];
         this._discoveryErrors = [];
         this._discoveryRows = [];
-        this._discovery = new ServiceDiscovery();
 
         window._settings = this._settings;
         window.set_default_size(640, 620);
@@ -258,7 +257,7 @@ export default class ServiceSwitchboardPreferences extends ExtensionPreferences 
         this._renderDiscoveryLoading();
 
         try {
-            const {services, errors} = await this._discovery.discover();
+            const {services, errors} = await discoverServices();
             this._discoveredServices = services;
             this._discoveryErrors = errors;
             this._updateSafetyMetadata();

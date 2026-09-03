@@ -3,7 +3,7 @@
 ```text
 GNOME Shell
     |
-    +-- ServicePanel
+    +-- createServicePanel() closure
     |      |
     |      +-- Your services [submenu]
     |      |      +-- PopupSwitchMenuItem: Service A [toggle]
@@ -12,13 +12,18 @@ GNOME Shell
     |      +-- Docker [submenu]
     |      +-- Preferences
     |
-    +-- ServiceController
+    +-- serviceController functions
            |
            +-- systemctl --user
            +-- docker
 ```
 
 Preferences are stored in GSettings.
+
+The project uses functional modules and explicit closure state. The only
+classes are the default extension and preferences entry points required by the
+GNOME Shell extension APIs; service control, discovery, and panel behavior are
+plain functions.
 
 Preferences run discovery asynchronously and independently for each backend:
 

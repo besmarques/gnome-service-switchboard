@@ -9,207 +9,149 @@ export const ServiceType = Object.freeze({
     DOCKER: 'docker',
 });
 
-export class ServiceController {
-    async getActiveStates(services) {
-        const states = new Map(services.map(service => [service.id, false]));
-        const systemd = services.filter(service =>
-            service.type === ServiceType.SYSTEMD_USER
-        );
-        const docker = services.filter(service =>
-            service.type === ServiceType.DOCKER
-        );
+function execute(argv) {
+    let process;
+    try {
+        process = Gio.Subprocess.new(argv,
+            Gio.SubprocessFlags.STDOUT_PIPE |
+            Gio.SubprocessFlags.STDERR_PIPE);
+    } catch (error) {
+        return Promise.reject(error);
+    }
 
-        const results = await Promise.allSettled([
-            this._getSystemdActiveStates(systemd),
-            this._getDockerActiveStates(docker),
-        ]);
-
-        for (const result of results) {
-            if (result.status === 'fulfilled') {
-                for (const [id, active] of result.value)
-                    states.set(id, active);
-            } else {
-                console.warn(
-                    `Service Switchboard: batched status check failed: ` +
-                    (result.reason?.message ?? String(result.reason))
-                );
+    return new Promise((resolve, reject) => {
+        process.communicate_utf8_async(null, null, (subprocess, result) => {
+            try {
+                const [, stdout, stderr] =
+                    subprocess.communicate_utf8_finish(result);
+                resolve({
+                    success: subprocess.get_successful(),
+                    status: subprocess.get_exit_status(),
+                    stdout: stdout ?? '',
+                    stderr: stderr ?? '',
+                });
+            } catch (error) {
+                reject(error);
             }
+        });
+    });
+}
+
+function validateTarget(target) {
+    if (typeof target !== 'string' || target.trim().length === 0)
+        throw new Error('Service target is empty');
+}
+
+function throwOnFailure(result, action, target) {
+    if (result.success)
+        return;
+
+    const detail = result.stderr || result.stdout ||
+        `process exited with status ${result.status}`;
+    throw new Error(`Could not ${action} ${target}: ${detail}`);
+}
+
+async function getSystemdActiveStates(services) {
+    if (services.length === 0)
+        return new Map();
+
+    services.forEach(service => validateTarget(service.target));
+    const result = await execute([
+        'systemctl', '--user', 'is-active',
+        ...services.map(service => service.target),
+    ]);
+    const output = result.stdout.trimEnd().split('\n');
+    return new Map(services.map((service, index) => [
+        service.id,
+        output[index]?.trim() === 'active',
+    ]));
+}
+
+async function getDockerActiveStates(services) {
+    if (services.length === 0)
+        return new Map();
+
+    services.forEach(service => validateTarget(service.target));
+    const result = await execute([
+        'docker', 'inspect',
+        '--format={{.Id}}\t{{.Name}}\t{{.State.Running}}',
+        ...services.map(service => service.target),
+    ]);
+    const containers = result.stdout.split('\n').flatMap(line => {
+        const [id, rawName, running] = line.trim().split('\t');
+        return id && rawName
+            ? [{id, name: rawName.replace(/^\//, ''), running}]
+            : [];
+    });
+
+    return new Map(services.map(service => {
+        const container = containers.find(candidate =>
+            candidate.name === service.target ||
+            candidate.id.startsWith(service.target)
+        );
+        return [service.id, container?.running === 'true'];
+    }));
+}
+
+export async function getActiveStates(services) {
+    const states = new Map(services.map(service => [service.id, false]));
+    const systemd = services.filter(service =>
+        service.type === ServiceType.SYSTEMD_USER);
+    const docker = services.filter(service =>
+        service.type === ServiceType.DOCKER);
+    const results = await Promise.allSettled([
+        getSystemdActiveStates(systemd),
+        getDockerActiveStates(docker),
+    ]);
+
+    for (const result of results) {
+        if (result.status === 'fulfilled') {
+            for (const [id, active] of result.value)
+                states.set(id, active);
+        } else {
+            console.warn(
+                `Service Switchboard: batched status check failed: ` +
+                (result.reason?.message ?? String(result.reason)));
         }
-
-        return states;
     }
+    return states;
+}
 
-    async isActive(service) {
-        switch (service.type) {
-        case ServiceType.SYSTEMD_USER:
-            return this._systemdIsActive(service.target);
-        case ServiceType.DOCKER:
-            return this._dockerIsActive(service.target);
-        default:
-            throw new Error(`Unsupported service type: ${service.type}`);
-        }
-    }
+export async function isServiceActive(service) {
+    validateTarget(service.target);
 
-    async setActive(service, active) {
-        switch (service.type) {
-        case ServiceType.SYSTEMD_USER:
-            return this._setSystemdActive(service.target, active);
-        case ServiceType.DOCKER:
-            return this._setDockerActive(service.target, active);
-        default:
-            throw new Error(`Unsupported service type: ${service.type}`);
-        }
-    }
-
-    async _systemdIsActive(unit) {
-        this._validateTarget(unit);
-
-        const result = await this._execute([
-            'systemctl',
-            '--user',
-            'is-active',
-            '--quiet',
-            unit,
+    if (service.type === ServiceType.SYSTEMD_USER) {
+        const result = await execute([
+            'systemctl', '--user', 'is-active', '--quiet', service.target,
         ]);
-
         return result.success;
     }
 
-    async _getSystemdActiveStates(services) {
-        if (services.length === 0)
-            return new Map();
-
-        for (const service of services)
-            this._validateTarget(service.target);
-
-        const result = await this._execute([
-            'systemctl', '--user', 'is-active',
-            ...services.map(service => service.target),
+    if (service.type === ServiceType.DOCKER) {
+        const result = await execute([
+            'docker', 'inspect', '--format={{.State.Running}}', service.target,
         ]);
-        const output = result.stdout.trimEnd().split('\n');
-        return new Map(services.map((service, index) => [
-            service.id,
-            output[index]?.trim() === 'active',
-        ]));
+        return result.success && result.stdout.trim() === 'true';
     }
 
-    async _setSystemdActive(unit, active) {
-        this._validateTarget(unit);
+    throw new Error(`Unsupported service type: ${service.type}`);
+}
 
-        const result = await this._execute([
-            'systemctl',
-            '--user',
-            active ? 'start' : 'stop',
-            unit,
+export async function setServiceActive(service, active) {
+    validateTarget(service.target);
+    let result;
+
+    if (service.type === ServiceType.SYSTEMD_USER) {
+        result = await execute([
+            'systemctl', '--user', active ? 'start' : 'stop', service.target,
         ]);
-
-        this._throwOnFailure(result, active ? 'start' : 'stop', unit);
-    }
-
-    async _dockerIsActive(container) {
-        this._validateTarget(container);
-
-        const result = await this._execute([
-            'docker',
-            'inspect',
-            '--format={{.State.Running}}',
-            container,
+    } else if (service.type === ServiceType.DOCKER) {
+        result = await execute([
+            'docker', active ? 'start' : 'stop', service.target,
         ]);
-
-        if (!result.success)
-            return false;
-
-        return result.stdout.trim() === 'true';
+    } else {
+        throw new Error(`Unsupported service type: ${service.type}`);
     }
 
-    async _getDockerActiveStates(services) {
-        if (services.length === 0)
-            return new Map();
-
-        for (const service of services)
-            this._validateTarget(service.target);
-
-        const result = await this._execute([
-            'docker', 'inspect',
-            '--format={{.Id}}\t{{.Name}}\t{{.State.Running}}',
-            ...services.map(service => service.target),
-        ]);
-        const containers = result.stdout.split('\n').flatMap(line => {
-            const [id, rawName, running] = line.trim().split('\t');
-            if (!id || !rawName)
-                return [];
-            return [{id, name: rawName.replace(/^\//, ''), running}];
-        });
-
-        return new Map(services.map(service => {
-            const container = containers.find(candidate =>
-                candidate.name === service.target ||
-                candidate.id.startsWith(service.target)
-            );
-            return [service.id, container?.running === 'true'];
-        }));
-    }
-
-    async _setDockerActive(container, active) {
-        this._validateTarget(container);
-
-        const result = await this._execute([
-            'docker',
-            active ? 'start' : 'stop',
-            container,
-        ]);
-
-        this._throwOnFailure(
-            result,
-            active ? 'start' : 'stop',
-            container
-        );
-    }
-
-    _validateTarget(target) {
-        if (typeof target !== 'string' || target.trim().length === 0)
-            throw new Error('Service target is empty');
-    }
-
-    _throwOnFailure(result, action, target) {
-        if (result.success)
-            return;
-
-        const detail = result.stderr || result.stdout ||
-            `process exited with status ${result.status}`;
-
-        throw new Error(`Could not ${action} ${target}: ${detail}`);
-    }
-
-    _execute(argv) {
-        let process;
-
-        try {
-            process = Gio.Subprocess.new(
-                argv,
-                Gio.SubprocessFlags.STDOUT_PIPE |
-                Gio.SubprocessFlags.STDERR_PIPE
-            );
-        } catch (error) {
-            return Promise.reject(error);
-        }
-
-        return new Promise((resolve, reject) => {
-            process.communicate_utf8_async(null, null, (subprocess, result) => {
-                try {
-                    const [, stdout, stderr] =
-                        subprocess.communicate_utf8_finish(result);
-
-                    resolve({
-                        success: subprocess.get_successful(),
-                        status: subprocess.get_exit_status(),
-                        stdout: stdout ?? '',
-                        stderr: stderr ?? '',
-                    });
-                } catch (error) {
-                    reject(error);
-                }
-            });
-        });
-    }
+    throwOnFailure(result, active ? 'start' : 'stop', service.target);
 }

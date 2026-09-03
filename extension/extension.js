@@ -1,12 +1,12 @@
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import {ServicePanel} from './servicePanel.js';
+import {createServicePanel} from './servicePanel.js';
 
 export default class ServiceSwitchboardExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
-        this._panel = new ServicePanel({
+        this._panel = createServicePanel({
             settings: this._settings,
             openPreferences: () => this.openPreferences(),
         });

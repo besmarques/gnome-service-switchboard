@@ -10,191 +10,100 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {ServiceController} from './serviceController.js';
+import {
+    getActiveStates,
+    isServiceActive,
+    setServiceActive,
+} from './serviceController.js';
 
-export class ServicePanel {
-    constructor({settings, openPreferences}) {
-        this._settings = settings;
-        this._openPreferences = openPreferences;
-        this._controller = new ServiceController();
-        this._rows = new Map();
-        this._destroyed = false;
-        this._refreshSourceId = 0;
-        this._refreshing = false;
-
-        this.indicator = new PanelMenu.Button(
-            0.0,
-            _('Service Switchboard'),
-            false
-        );
-
-        this.indicator.add_child(new St.Icon({
-            icon_name: 'system-run-symbolic',
-            style_class: 'system-status-icon',
-        }));
-
-        this._monitorsChangedId = Main.layoutManager.connect(
-            'monitors-changed',
-            () => this._updateMenuHeight()
-        );
-        this._updateMenuHeight();
-
-        this._settingsChangedId = this._settings.connect(
-            'changed::services-json',
-            () => this._rebuildMenu()
-        );
-
-        this._intervalChangedId = this._settings.connect(
-            'changed::refresh-interval',
-            () => this._startRefreshTimer()
-        );
-
-        this._menuOpenChangedId = this.indicator.menu.connect(
-            'open-state-changed',
-            (_menu, open) => {
-                if (open)
-                    this.refreshAll();
-            }
-        );
-
-        this._rebuildMenu();
-        this._startRefreshTimer();
-        this.refreshAll();
+function loadServices(settings) {
+    let parsed;
+    try {
+        parsed = JSON.parse(settings.get_string('services-json'));
+    } catch (error) {
+        console.warn(
+            `Service Switchboard: invalid services configuration: ${error.message}`);
+        return [];
     }
 
-    destroy() {
-        if (this._destroyed)
+    return Array.isArray(parsed) ? parsed.filter(service =>
+        typeof service?.id === 'string' &&
+        typeof service?.name === 'string' &&
+        typeof service?.type === 'string' &&
+        typeof service?.target === 'string' &&
+        service.name.trim().length > 0 &&
+        service.target.trim().length > 0
+    ) : [];
+}
+
+function setRowState(state, active) {
+    if (state.row.state === active)
+        return;
+    state.updating = true;
+    state.row.setToggleState(active);
+    state.updating = false;
+}
+
+export function createServicePanel({settings, openPreferences}) {
+    const panel = {
+        rows: new Map(),
+        destroyed: false,
+        refreshing: false,
+        refreshSourceId: 0,
+        settingsChangedId: 0,
+        intervalChangedId: 0,
+        menuOpenChangedId: 0,
+        monitorsChangedId: 0,
+    };
+
+    const indicator = new PanelMenu.Button(0.0, _('Service Switchboard'), false);
+    panel.indicator = indicator;
+    indicator.add_child(new St.Icon({
+        icon_name: 'system-run-symbolic',
+        style_class: 'system-status-icon',
+    }));
+
+    const updateMenuHeight = () => {
+        const screenHeight = Main.layoutManager.primaryMonitor?.height ??
+            global.stage.height;
+        indicator.menu.actor.set_style(
+            `max-height: ${Math.max(320, Math.floor(screenHeight * 0.65))}px;`);
+    };
+
+    const refreshRow = async state => {
+        if (panel.destroyed || state.busy)
             return;
-
-        this._destroyed = true;
-
-        if (this._refreshSourceId) {
-            GLib.Source.remove(this._refreshSourceId);
-            this._refreshSourceId = 0;
-        }
-
-        if (this._settingsChangedId) {
-            this._settings.disconnect(this._settingsChangedId);
-            this._settingsChangedId = 0;
-        }
-
-        if (this._intervalChangedId) {
-            this._settings.disconnect(this._intervalChangedId);
-            this._intervalChangedId = 0;
-        }
-
-        if (this._menuOpenChangedId) {
-            this.indicator.menu.disconnect(this._menuOpenChangedId);
-            this._menuOpenChangedId = 0;
-        }
-
-        if (this._monitorsChangedId) {
-            Main.layoutManager.disconnect(this._monitorsChangedId);
-            this._monitorsChangedId = 0;
-        }
-
-        this._rows.clear();
-        this.indicator.destroy();
-        this.indicator = null;
-        this._settings = null;
-        this._openPreferences = null;
-        this._controller = null;
-    }
-
-    async refreshAll() {
-        if (this._destroyed || this._refreshing)
-            return;
-
-        this._refreshing = true;
-        const rows = [...this._rows.values()];
+        let active = false;
         try {
-            const services = rows.map(state => state.service);
-            const states = await this._controller.getActiveStates(services);
+            active = await isServiceActive(state.service);
+        } catch (error) {
+            console.warn(
+                `Service Switchboard: status check failed for ` +
+                `${state.service.name}: ${error.message}`);
+        }
+        if (!panel.destroyed && !state.busy)
+            setRowState(state, active);
+    };
 
-            if (this._destroyed)
-                return;
-
-            for (const state of rows) {
-                if (!state.busy && this._rows.get(state.service.id) === state)
-                    this._applyRowState(state, states.get(state.service.id));
-            }
+    const setState = async (state, active) => {
+        state.busy = true;
+        state.row.sensitive = false;
+        try {
+            await setServiceActive(state.service, active);
+        } catch (error) {
+            Main.notifyError(_('Service Switchboard'), error.message);
         } finally {
-            this._refreshing = false;
+            state.busy = false;
+            if (!panel.destroyed) {
+                await refreshRow(state);
+                state.row.sensitive = true;
+            }
         }
-    }
+    };
 
-    _rebuildMenu() {
-        if (this._destroyed)
-            return;
-
-        this.indicator.menu.removeAll();
-        this._rows.clear();
-
-        const services = this._loadServices();
-
-        if (services.length === 0) {
-            this.indicator.menu.addMenuItem(
-                new PopupMenu.PopupMenuItem(_('No services configured'), {
-                    reactive: false,
-                    can_focus: false,
-                })
-            );
-        } else {
-            const groups = [
-                {
-                    label: _('Your services'),
-                    services: services.filter(service =>
-                        service.type === 'systemd-user' && !service.protected
-                    ),
-                },
-                {
-                    label: _('Desktop and system'),
-                    services: services.filter(service =>
-                        service.type === 'systemd-user' && service.protected
-                    ),
-                },
-                {
-                    label: _('Docker'),
-                    services: services.filter(service =>
-                        service.type === 'docker'
-                    ),
-                },
-            ];
-
-            for (const group of groups)
-                this._addServiceGroup(group.label, group.services);
-        }
-
-        this.indicator.menu.addMenuItem(
-            new PopupMenu.PopupSeparatorMenuItem()
-        );
-
-        this.indicator.menu.addAction(_('Preferences'), () => {
-            this._openPreferences();
-        });
-
-        this.refreshAll();
-    }
-
-    _addServiceGroup(label, services) {
-        if (services.length === 0)
-            return;
-
-        const submenu = new PopupMenu.PopupSubMenuMenuItem(label, false);
-        this.indicator.menu.addMenuItem(submenu);
-
-        for (const service of services)
-            this._addServiceRow(service, submenu.menu);
-    }
-
-    _addServiceRow(service, menu) {
-        const row = new PopupMenu.PopupSwitchMenuItem(
-            service.name,
-            false,
-            {}
-        );
+    const addServiceRow = (service, menu) => {
+        const row = new PopupMenu.PopupSwitchMenuItem(service.name, false, {});
         row.add_style_class_name('service-switchboard-service-row');
-
         const state = {
             service,
             row,
@@ -206,137 +115,123 @@ export class ServicePanel {
         row.connect('toggled', (_item, active) => {
             if (state.updating || state.busy)
                 return;
-
-            if (!active && state.service.protected === true &&
+            if (!active && service.protected === true &&
                 Date.now() > state.confirmStopUntil) {
                 state.confirmStopUntil = Date.now() + 10000;
-                state.updating = true;
-                state.row.setToggleState(true);
-                state.updating = false;
+                setRowState(state, true);
                 Main.notify(
                     _('Service Switchboard safety warning'),
                     _(
                         'Stopping this desktop or system service may disrupt ' +
                         'your session. Toggle it off again within 10 seconds ' +
-                        'to confirm.'
-                    )
-                );
+                        'to confirm.'));
                 return;
             }
-
             state.confirmStopUntil = 0;
-
-            this._setServiceState(state, active);
+            setState(state, active);
         });
 
-        this._rows.set(service.id, state);
+        panel.rows.set(service.id, state);
         menu.addMenuItem(row);
-    }
+    };
 
-    _updateMenuHeight() {
-        const screenHeight = Main.layoutManager.primaryMonitor?.height ??
-            global.stage.height;
-        const maxHeight = Math.max(320, Math.floor(screenHeight * 0.65));
-        this.indicator.menu.actor.set_style(`max-height: ${maxHeight}px;`);
-    }
+    const addServiceGroup = (label, services) => {
+        if (services.length === 0)
+            return;
+        const submenu = new PopupMenu.PopupSubMenuMenuItem(label, false);
+        indicator.menu.addMenuItem(submenu);
+        services.forEach(service => addServiceRow(service, submenu.menu));
+    };
 
-    async _setServiceState(state, active) {
-        state.busy = true;
-        state.row.sensitive = false;
-
+    const refreshAll = async () => {
+        if (panel.destroyed || panel.refreshing)
+            return;
+        panel.refreshing = true;
+        const rows = [...panel.rows.values()];
         try {
-            await this._controller.setActive(state.service, active);
-        } catch (error) {
-            Main.notifyError(
-                _('Service Switchboard'),
-                error.message
-            );
+            const states = await getActiveStates(rows.map(row => row.service));
+            if (panel.destroyed)
+                return;
+            for (const state of rows) {
+                if (!state.busy && panel.rows.get(state.service.id) === state)
+                    setRowState(state, states.get(state.service.id));
+            }
         } finally {
-            if (!this._destroyed) {
-                await this._refreshRow(state);
-                state.row.sensitive = true;
-                state.busy = false;
-            }
+            panel.refreshing = false;
         }
-    }
+    };
 
-    async _refreshRow(state) {
-        if (this._destroyed || state.busy)
+    const rebuildMenu = () => {
+        if (panel.destroyed)
             return;
+        indicator.menu.removeAll();
+        panel.rows.clear();
+        const services = loadServices(settings);
 
-        let active = false;
-
-        try {
-            active = await this._controller.isActive(state.service);
-        } catch (error) {
-            console.warn(
-                `Service Switchboard: status check failed for ` +
-                `${state.service.name}: ${error.message}`
-            );
-        }
-
-        if (this._destroyed || state.busy)
-            return;
-
-        this._applyRowState(state, active);
-    }
-
-    _applyRowState(state, active) {
-        if (state.row.state === active)
-            return;
-
-        state.updating = true;
-        state.row.setToggleState(active);
-        state.updating = false;
-    }
-
-    _startRefreshTimer() {
-        if (this._refreshSourceId) {
-            GLib.Source.remove(this._refreshSourceId);
-            this._refreshSourceId = 0;
+        if (services.length === 0) {
+            indicator.menu.addMenuItem(new PopupMenu.PopupMenuItem(
+                _('No services configured'), {reactive: false, can_focus: false}));
+        } else {
+            addServiceGroup(_('Your services'), services.filter(service =>
+                service.type === 'systemd-user' && !service.protected));
+            addServiceGroup(_('Desktop and system'), services.filter(service =>
+                service.type === 'systemd-user' && service.protected));
+            addServiceGroup(_('Docker'), services.filter(service =>
+                service.type === 'docker'));
         }
 
-        if (this._destroyed)
+        indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        indicator.menu.addAction(_('Preferences'), openPreferences);
+        refreshAll();
+    };
+
+    const startRefreshTimer = () => {
+        if (panel.refreshSourceId)
+            GLib.Source.remove(panel.refreshSourceId);
+        panel.refreshSourceId = 0;
+        if (panel.destroyed)
             return;
-
-        const seconds = Math.max(
-            2,
-            this._settings.get_uint('refresh-interval')
-        );
-
-        this._refreshSourceId = GLib.timeout_add_seconds(
-            GLib.PRIORITY_DEFAULT,
-            seconds,
-            () => {
-                this.refreshAll();
+        const seconds = Math.max(2, settings.get_uint('refresh-interval'));
+        panel.refreshSourceId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT, seconds, () => {
+                refreshAll();
                 return GLib.SOURCE_CONTINUE;
-            }
-        );
-    }
+            });
+    };
 
-    _loadServices() {
-        let parsed;
+    panel.monitorsChangedId = Main.layoutManager.connect(
+        'monitors-changed', updateMenuHeight);
+    panel.settingsChangedId = settings.connect(
+        'changed::services-json', rebuildMenu);
+    panel.intervalChangedId = settings.connect(
+        'changed::refresh-interval', startRefreshTimer);
+    panel.menuOpenChangedId = indicator.menu.connect(
+        'open-state-changed', (_menu, open) => {
+            if (open)
+                refreshAll();
+        });
 
-        try {
-            parsed = JSON.parse(this._settings.get_string('services-json'));
-        } catch (error) {
-            console.warn(
-                `Service Switchboard: invalid services configuration: ` +
-                error.message
-            );
-            return [];
-        }
+    const destroy = () => {
+        if (panel.destroyed)
+            return;
+        panel.destroyed = true;
+        if (panel.refreshSourceId)
+            GLib.Source.remove(panel.refreshSourceId);
+        if (panel.settingsChangedId)
+            settings.disconnect(panel.settingsChangedId);
+        if (panel.intervalChangedId)
+            settings.disconnect(panel.intervalChangedId);
+        if (panel.menuOpenChangedId)
+            indicator.menu.disconnect(panel.menuOpenChangedId);
+        if (panel.monitorsChangedId)
+            Main.layoutManager.disconnect(panel.monitorsChangedId);
+        panel.rows.clear();
+        indicator.destroy();
+    };
 
-        if (!Array.isArray(parsed))
-            return [];
-
-        return parsed.filter(service =>
-            typeof service?.id === 'string' &&
-            typeof service?.name === 'string' &&
-            typeof service?.type === 'string' &&
-            typeof service?.target === 'string' &&
-            service.name.trim().length > 0 &&
-            service.target.trim().length > 0
-        );
-    }
+    updateMenuHeight();
+    rebuildMenu();
+    startRefreshTimer();
+    refreshAll();
+    return {indicator, destroy};
 }

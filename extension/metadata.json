@@ -8,6 +8,6 @@
   "url": "https://github.com/besmarques/gnome-service-switchboard",
   "gettext-domain": "service-switchboard@besmarques.eu",
   "settings-schema": "org.gnome.shell.extensions.service-switchboard",
-  "version": 4,
-  "version-name": "0.2.2"
+  "version": 5,
+  "version-name": "0.3.0"
 }

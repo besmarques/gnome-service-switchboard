@@ -118,6 +118,8 @@ artifact, and attaches it to a GitHub release.
 This project is structured to follow current extensions.gnome.org review guidance:
 
 - ES modules, GNOME 45+ style.
+- Functional controller, discovery, and panel modules with closure-held state.
+- Classes are limited to the two lifecycle adapters required by GNOME Shell.
 - No side effects before `enable()`.
 - `disable()` is synchronous.
 - All settings signal handlers and GLib timers are removed on destroy.
